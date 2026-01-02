@@ -9,7 +9,6 @@ from urllib.parse import quote
 
 app = FastAPI()
 
-# CORS settings: Render-এ হোস্ট করলে এটি অবশ্যই লাগবে
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,8 +17,8 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "X-Filename"],
 )
 
-# Render-এর জন্য অস্থায়ী ফোল্ডার
-TEMP_DIR = "/tmp/downloads" if os.environ.get("RENDER") else "temp_downloads"
+# Render temporary directory
+TEMP_DIR = "/tmp/downloads"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 class VideoRequest(BaseModel):
@@ -30,62 +29,54 @@ def cleanup_file(path: str):
     if os.path.exists(path):
         os.remove(path)
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
 @app.post("/info")
 async def get_video_info(request: VideoRequest):
-    ydl_opts = {'quiet': True, 'noplaylist': True}
+    # 'backend/cookies.txt' file thakle eita kaj korbe
+    cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
+    ydl_opts = {
+        'quiet': True, 
+        'noplaylist': True,
+        'cookiefile': cookie_path if os.path.exists(cookie_path) else None
+    }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(request.url, download=False)
             formats = info.get('formats', [])
-            qualities = []
-            seen = set()
-            for f in formats:
-                h = f.get('height')
-                if h and h not in seen and f.get('vcodec') != 'none':
-                    qualities.append({"label": f"{h}p", "value": str(h)})
-                    seen.add(h)
-            qualities.sort(key=lambda x: int(x['value']), reverse=True)
-            qualities.append({"label": "Audio (MP3)", "value": "audio"})
-            return {"title": info.get('title'), "qualities": qualities}
+            qualities = [{"label": f"{f.get('height')}p", "value": str(f.get('height'))} 
+                         for f in formats if f.get('height') and f.get('vcodec') != 'none']
+            
+            # Unique qualities filter
+            unique_qualities = list({q['value']: q for q in qualities}.values())
+            unique_qualities.sort(key=lambda x: int(x['value']), reverse=True)
+            unique_qualities.append({"label": "Audio (MP3)", "value": "audio"})
+            
+            return {"title": info.get('title'), "qualities": unique_qualities}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/download")
 async def download_video(request: VideoRequest, background_tasks: BackgroundTasks):
-    url = request.url
-    quality = request.quality
-    
-    format_str = 'bestaudio/best' if quality == "audio" else f'bestvideo[height<={quality}]+bestaudio/best/best[height<={quality}]'
+    cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
+    format_str = 'bestaudio/best' if request.quality == "audio" else f'bestvideo[height<={request.quality}]+bestaudio/best'
     
     ydl_opts = {
         'outtmpl': os.path.join(TEMP_DIR, '%(title)s.%(ext)s'),
         'format': format_str,
-        'noplaylist': True,
+        'cookiefile': cookie_path if os.path.exists(cookie_path) else None,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            info = ydl.extract_info(request.url, download=True)
             file_path = ydl.prepare_filename(info)
             filename = os.path.basename(file_path)
             
-        # ফাইলটি পাঠানোর পর সার্ভার থেকে মুছে ফেলার ব্যবস্থা
         background_tasks.add_task(cleanup_file, file_path)
-        
-        return FileResponse(
-            path=file_path, 
-            filename=filename, 
-            headers={"X-Filename": quote(filename)}
-        )
+        return FileResponse(path=file_path, filename=filename, headers={"X-Filename": quote(filename)})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# Frontend files serve করা
+# Frontend serve
 current_dir = os.path.dirname(__file__)
 frontend_path = os.path.join(current_dir, "..", "frontend")
-if os.path.exists(frontend_path):
-    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="static")
+app.mount("/", StaticFiles(directory=frontend_path, html=True), name="static")
