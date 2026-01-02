@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🎥 Universal Video Downloader</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1 class="title">🎥 Video Downloader</h1>
+    <p class="subtitle">Paste link, check quality, and download instantly</p>
+
+    <div class="card">
+      <div class="input-container">
+        <input id="videoURL" type="text" placeholder="🔗 Paste your video link here..." />
+        <button id="checkBtn" onclick="checkVideo()">Check Link</button>
+      </div>
+
+      <div id="videoInfoSection" style="display: none; margin-top: 25px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px;">
+        <p id="videoTitle"></p>
+        
+        <div class="quality-wrapper">
+          <label class="quality-label">Available Qualities:</label>
+          <select id="qualitySelect"></select>
+        </div>
+
+        <button id="downloadBtn" onclick="downloadVideo()">Start Download</button>
+      </div>
+
+      <p id="status"></p>
+    </div>
+
+    <footer>
+      <p>Created by Montasir Mahmud</p>
+    </footer>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
