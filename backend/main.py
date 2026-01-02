@@ -43,11 +43,13 @@ def health_check():
 
 @app.post("/info")
 async def get_video_info(request: VideoRequest):
-    ydl_opts = {
-        'quiet': True,
-        'noplaylist': True,
-        'cookiefile': COOKIE_PATH if os.path.exists(COOKIE_PATH) else None,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+   ydl_opts = {
+    'outtmpl': os.path.join(TEMP_DIR, '%(title)s.%(ext)s'),
+    'format': format_str,
+    'cookiefile': COOKIE_PATH if os.path.exists(COOKIE_PATH) else None,
+    'noplaylist': True,
+    'merge_output_format': 'mp4', # সব সময় mp4 ফরম্যাটে মার্জ করবে
+}
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
