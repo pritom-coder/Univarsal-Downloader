@@ -1,82 +1,77 @@
 async function checkVideo() {
-  const videoURL = document.getElementById("videoURL").value.trim();
-  const statusEl = document.getElementById("status");
-  const checkBtn = document.getElementById("checkBtn");
-  const infoSection = document.getElementById("videoInfoSection");
-  const qualitySelect = document.getElementById("qualitySelect");
+    const videoURL = document.getElementById("videoURL").value.trim();
+    const statusEl = document.getElementById("status");
+    const infoSection = document.getElementById("videoInfoSection");
+    const qualitySelect = document.getElementById("qualitySelect");
 
-  if (!videoURL) {
-    statusEl.textContent = "⚠️ Please paste a link!";
-    statusEl.className = "error";
-    return;
-  }
+    if (!videoURL) {
+        statusEl.textContent = "⚠️ Please paste a link!";
+        return;
+    }
 
-  statusEl.textContent = "🔍 Fetching qualities...";
-  statusEl.className = "loading";
-  checkBtn.disabled = true;
-  infoSection.style.display = "none";
+    statusEl.textContent = "🔍 Fetching video info...";
+    infoSection.style.display = "none";
 
-  try {
-    const response = await fetch("http://127.0.0.1:8000/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: videoURL }),
-    });
+    try {
+        const response = await fetch("/info", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: videoURL }),
+        });
 
-    if (!response.ok) throw new Error("Video not found or link invalid.");
+        if (!response.ok) throw new Error("Could not find video!");
 
-    const data = await response.json();
-    
-    // টাইটেল সেট করা
-    document.getElementById("videoTitle").textContent = "🎬 " + data.title;
-    
-    // অপশনগুলো লোড করা
-    qualitySelect.innerHTML = "";
-    data.qualities.forEach(q => {
-      const opt = document.createElement("option");
-      opt.value = q.value;
-      opt.textContent = q.label;
-      qualitySelect.appendChild(opt);
-    });
+        const data = await response.json();
+        document.getElementById("videoTitle").textContent = data.title;
+        
+        qualitySelect.innerHTML = "";
+        data.qualities.forEach(q => {
+            const opt = document.createElement("option");
+            opt.value = q.value;
+            opt.textContent = q.label;
+            qualitySelect.appendChild(opt);
+        });
 
-    statusEl.textContent = "";
-    infoSection.style.display = "block";
-  } catch (err) {
-    statusEl.textContent = "❌ " + err.message;
-    statusEl.className = "error";
-  } finally {
-    checkBtn.disabled = false;
-  }
+        statusEl.textContent = "";
+        infoSection.style.display = "block";
+    } catch (err) {
+        statusEl.textContent = "❌ Error: " + err.message;
+    }
 }
 
 async function downloadVideo() {
-  const videoURL = document.getElementById("videoURL").value;
-  const quality = document.getElementById("qualitySelect").value;
-  const statusEl = document.getElementById("status");
-  const btn = document.getElementById("downloadBtn");
+    const videoURL = document.getElementById("videoURL").value;
+    const quality = document.getElementById("qualitySelect").value;
+    const statusEl = document.getElementById("status");
 
-  statusEl.textContent = "⏳ Downloading file to server...";
-  statusEl.className = "loading";
-  btn.disabled = true;
+    statusEl.textContent = "⏳ Downloading to server... please wait";
 
-  try {
-    const response = await fetch("http://127.0.0.1:8000/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: videoURL, quality: quality }),
-    });
+    try {
+        const response = await fetch("/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: videoURL, quality: quality }),
+        });
 
-    const data = await response.json();
-    if (response.ok) {
-      statusEl.textContent = "✅ Success: " + data.filename;
-      statusEl.className = "success";
-    } else {
-      throw new Error(data.detail || "Download failed");
+        if (!response.ok) throw new Error("Download failed!");
+
+        const blob = await response.blob();
+        let filename = "video.mp4";
+        const customHeader = response.headers.get("X-Filename");
+        if (customHeader) filename = decodeURIComponent(customHeader);
+
+        // ব্রাউজারের মাধ্যমে ইউজারের ডাউনলোড ফোল্ডারে পাঠানো
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(downloadUrl);
+        a.remove();
+        
+        statusEl.textContent = "✅ Download Complete!";
+    } catch (err) {
+        statusEl.textContent = "❌ Error: " + err.message;
     }
-  } catch (err) {
-    statusEl.textContent = "❌ Error: " + err.message;
-    statusEl.className = "error";
-  } finally {
-    btn.disabled = false;
-  }
 }
