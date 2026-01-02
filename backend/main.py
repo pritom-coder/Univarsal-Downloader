@@ -1,114 +1,91 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  
+import os
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import yt_dlp
-import os
-from dotenv import load_dotenv
+from urllib.parse import quote
 
-# Load configuration from .env file
-load_dotenv()
-
-# Set up global variables from environment or defaults
-DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "downloads")
-DEBUG = os.getenv("DEBUG", "False") == "True"
-
-# Ensure the download directory exists on the system
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# Initialize FastAPI application
 app = FastAPI()
 
-# Configure CORS (Cross-Origin Resource Sharing)
-# This allows your frontend (HTML/JS) to communicate with this backend API
+# CORS settings: Render-এ হোস্ট করলে এটি অবশ্যই লাগবে
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, replace "*" with your specific domain      
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "X-Filename"],
 )
 
-# Define the data structure for incoming requests
+# Render-এর জন্য অস্থায়ী ফোল্ডার
+TEMP_DIR = "/tmp/downloads" if os.environ.get("RENDER") else "temp_downloads"
+os.makedirs(TEMP_DIR, exist_ok=True)
+
 class VideoRequest(BaseModel):
     url: str
-    quality: str = "best" # Default to 'best' if no quality is provided
+    quality: str = "best"
 
-# ROUTE 1: Fetch Video Information and available qualities
+def cleanup_file(path: str):
+    if os.path.exists(path):
+        os.remove(path)
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 @app.post("/info")
-def get_video_info(request: VideoRequest):
-    url = request.url
-    
-    # Configuration for yt_dlp to extract info without downloading
-    ydl_opts = {
-        'quiet': True,       # Suppress unnecessary terminal output
-        'noplaylist': True,  # Process only the single video link provided
-    }
-
+async def get_video_info(request: VideoRequest):
+    ydl_opts = {'quiet': True, 'noplaylist': True}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract metadata without downloading the actual file
-            info = ydl.extract_info(url, download=False)
-            
+            info = ydl.extract_info(request.url, download=False)
             formats = info.get('formats', [])
-            available_qualities = set() # Using a set to avoid duplicate resolutions
-
-            # Loop through available formats to find valid video heights
+            qualities = []
+            seen = set()
             for f in formats:
-                if f.get('height'):
-                    available_qualities.add(f['height'])
-            
-            # Sort resolutions from highest to lowest (e.g., 1080p, 720p...)
-            sorted_qualities = sorted(list(available_qualities), reverse=True)
-            
-            # Map resolutions to a cleaner format for the frontend dropdown
-            options = [{"label": f"{q}p", "value": str(q)} for q in sorted_qualities]
-            
-            # Always add an option for audio-only download
-            options.append({"label": "Audio Only (MP3)", "value": "audio"})
-
-            return {
-                "title": info.get('title'),
-                "thumbnail": info.get('thumbnail'),
-                "qualities": options
-            }
-
+                h = f.get('height')
+                if h and h not in seen and f.get('vcodec') != 'none':
+                    qualities.append({"label": f"{h}p", "value": str(h)})
+                    seen.add(h)
+            qualities.sort(key=lambda x: int(x['value']), reverse=True)
+            qualities.append({"label": "Audio (MP3)", "value": "audio"})
+            return {"title": info.get('title'), "qualities": qualities}
     except Exception as e:
-        # Return a 400 error if URL is invalid or info extraction fails
         raise HTTPException(status_code=400, detail=str(e))
 
-# ROUTE 2: Handle the actual video/audio download
 @app.post("/download")
-def download_video(request: VideoRequest):
+async def download_video(request: VideoRequest, background_tasks: BackgroundTasks):
     url = request.url
     quality = request.quality
     
-    # Set the download format based on user selection
-    if quality == "audio":
-        format_string = 'bestaudio/best' # Get best audio only
-    elif quality == "best":
-         format_string = 'bestvideo+bestaudio/best' # Get maximum quality
-    else:
-        # Target specific resolution height or the next best thing below it
-        format_string = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]'
+    format_str = 'bestaudio/best' if quality == "audio" else f'bestvideo[height<={quality}]+bestaudio/best/best[height<={quality}]'
     
-    # Download settings
     ydl_opts = {
-        # Define where to save the file and what to name it
-        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
-        'format': format_string,
-        'noplaylist': True,  
+        'outtmpl': os.path.join(TEMP_DIR, '%(title)s.%(ext)s'),
+        'format': format_str,
+        'noplaylist': True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Download the file to the local server storage
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
+            file_path = ydl.prepare_filename(info)
+            filename = os.path.basename(file_path)
             
-        return {
-            "title": info.get('title'), 
-            "filename": filename, 
-            "quality_downloaded": quality,
-            "status": "completed"
-        }
+        # ফাইলটি পাঠানোর পর সার্ভার থেকে মুছে ফেলার ব্যবস্থা
+        background_tasks.add_task(cleanup_file, file_path)
+        
+        return FileResponse(
+            path=file_path, 
+            filename=filename, 
+            headers={"X-Filename": quote(filename)}
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# Frontend files serve করা
+current_dir = os.path.dirname(__file__)
+frontend_path = os.path.join(current_dir, "..", "frontend")
+if os.path.exists(frontend_path):
+    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="static")
